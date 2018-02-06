@@ -1,0 +1,200 @@
+Inventory > where we give information of severs like db, application or webserver etc
+with FQDN or IP address.
+
+> After installing ansible engine, do cd /etc/ansible where we have anbsible.cfg, hosts and
+roles files which are core files for ansible.
+ 
+> after installation it is recommended to work copy of ansible folder at /etc/ansible
+cp -R /myplatform (example to copy ansible files to directory)
+
+> vi ansible.cfg , modify absolute path to host name
+>vi host file, clear all text and enter web server names or ip address to push the code
+============commonly used commands==================
+we have to test ansible machines by using this command
+ >> ansible -m ping all
+gets pong response
+
+>> ansible -m shell -a 'hostname' all
+command give status of hosts 
+
+>> ansible -m shell -a 'df -h' all
+it will show disk space on servers
+
+>> ansible -m shell -a 'whoami' all
+since we use remote computer to install and if you want to use as sudo we have add -b option
+eg :  ansible -b -K -m user -a 'name-testuser' all
+
+>> ansible -m shell -a 'getent passwd | grep 'testuser' all
+this will check whether sudo users are to all servers.
+
+==========================================================
+Role is a list of cmds using on target machine in a given order then
+playbooks are used which role is applied on which target machine.
+every role is under Roles directory, it must contain folder called task and which contain
+a file name called main.yml
+
+this dir is created under myplatform folder
+mkdir roles/basic/tasks , cd roles/basic/tasks 
+
+now vi main.yml 
+ 
+- name: "installing VIM" (descriptive name)
+  apt: pkg=vim state=installed  ( apt is the module, we installing vim)
+
+then save the file, now we have to asign this playbook to server
+we have to create playbook file at cd /myplatform main folder
+
+vi playbook.yml
+
+---(every yml file has 3 lines indentation )
+- hosts:all (it will run on all host machine)
+  become: true (becomes sudo users)
+  roles:
+  - basic( passing roles file)
+
+then save the file(WQ)
+to run playbook >> ansible-playbook -K playbook.yml
+
+output will be on target with roles commands 
+==================================================================
+2nd role we will edit same role file ie vi main.yml
+vi main.yml
+- name: "installing VIM"
+  apt: pkg=vim state=installed
+- name: "installing DNS Utils"
+  apt: pkg=dnsutils state=installed
+- name: "installing GIT"
+  apt: pkg=git state=installed
+
+save file wq
+to run playbook >> ansible-playbook -K playbook.yml
+OK means already instaled else it will give changed status
+
+Instead of passing name and pkg task repeatedly we can create list
+vi main.yml
+- name: "installing additional software"
+  apt: pkg={{ item }} state=installed (using pkg= {{ item }} to create list of item.
+  with_item:
+  - dnsutils
+  - git
+  - vim
+  - ntp
+  - at
+  - lvm2
+saving file wq
+to run playbook >> ansible-playbook -K playbook.yml
+===========================================================
+Task to coping files to another host using cp module
+
+vi main.yml
+- name: "installing additional software"
+  apt: pkg={{ item }} state=installed (using pkg= {{ item }} to create list of item.
+  with_item:
+  - dnsutils
+  - git
+  - vim
+  - ntp
+  - at
+  - lvm2
+
+- name: "Adding bashrc"
+  copy: src=../files/bash.bashrc dest=/etc/bash.bashrc owner=root group=root mode=0644
+ { here we r using src and dest parameter to transfer file giving permisions}
+
+saving file wq
+to run playbook >> ansible-playbook -K playbook.yml
+
+when we use this task there is no change in bashrc as it is there by default
+so we have to remove bashrc file to take change in place
+we can do this by using shell module in ansible playbook
+
+vi main.yml
+- name: "installing additional software"
+  apt: pkg={{ item }} state=installed (using pkg= {{ item }} to create list of item.
+  with_item:
+  - dnsutils
+  - git
+  - vim
+  - ntp
+  - at
+  - lvm2
+
+- name: "Adding bashrc"
+  copy: src=../files/bash.bashrc dest=/etc/bash.bashrc owner=root group=root mode=0644
+- name: "removing Ben's bashrc"
+  shell: create=/home/bf/.bashrc_backup mv /home/bf/.bashrc /home/bf/.bashrc_backup
+- name: "root's bashrc"
+  shell: create=/root/.bashrc_backup mv /root/.bashrc /root/.bashrc_backup
+{ shell module is used to execute commands , here we moving initial bashrc along with root user bashrc and normal user}
+saving file wq
+to run playbook >> ansible-playbook -K playbook.yml
+=====================================================================
+setup webserver reverse proxy
+
+mkdir roles/webserver/tasks
+cd roles/webserver/tasks
+vi main.yml
+- name: "installing webserver software"
+  apt: name={{ item }}
+  with_items:
+  - apache2
+
+- name: "enablingproxy module"
+  apache2_module: name=proxy_http (this step used to activate appache using apache2_module)
+- name: "adding proxy configuration" { after activating we have define what requests are to be forwarded to which destination by copying proxy.conf)
+  template: src=../files/proxy.conf dest=/etx/apache2/conf.available owner=root group=root mode=0644
+  { template module is similar to cp module, aditionally it checks source files for variables}
+
+saving file wq
+to run playbook >> ansible-playbook -K playbook.yml
+
+vi proxy.conf
+ProxyPass / http: //{{ hostvar['appserver']['ansible_eth0']['ipv4']['address'] }}:8000/
+ProxyPassReverse / http://{{ hostvars['appserver']['ansible_eth0']['ipv4']['address'] }}:8000/
+save file
+
+we have 2 steps to enable proxy configuration
+1 shell module to enable proxy
+2 notify apache about config change
+
+if add these cmd to roles it will run them again and again instead we are going to use 
+handlers to notify about config change.
+vi main.yml
+- name: "installing webserver software"
+  apt: name={{ item }}
+  with_items:
+  - apache2
+
+- name: "enablingproxy module"
+  apache2_module: name=proxy_http (this step used to activate appache using apache2_module)
+- name: "adding proxy configuration" { after activating we have define what requests are to be forwarded to which destination by copying proxy.conf)
+  template: src=../files/proxy.conf dest=/etx/apache2/conf.available owner=root group=root mode=0644
+  notify:
+  - enable-proxy-config
+save :wq
+
+actual handler def goes to main.yml
+mkdir roles/webserver/handlers
+vi roles/webserver/handlers/main.yml
+
+- name: enable-proxy-config( we have to use same that is used in notify above)
+  shell: a2enconf proxy.conf
+  notify: (we can use handler to notify other handlers)
+  - restart-apache
+- name: restart-apache
+  service: name=apache2 state=restarted
+save :wq
+
+vi playbook.yml
+---
+- hosts: all
+  become: true
+  roles:
+  - basic
+- hosts: webserver
+  become:true
+  roles:
+  -webserver  
+save :wq
+to run playbook >> ansible-playbook -K playbook.yml
+
